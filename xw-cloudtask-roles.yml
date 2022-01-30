@@ -1,0 +1,10 @@
+Description: Service linked roles for api gate and lambda integration
+Resources:
+  ApiGatewaySR:
+    Type: 'AWS::IAM::ServiceLinkedRole'
+    Properties:
+      AWSServiceName: ops.apigateway.amazonaws.com
+  LambdaSR:
+    Type: 'AWS::IAM::ServiceLinkedRole'
+    Properties:
+      AWSServiceName: replicator.lambda.amazonaws.com

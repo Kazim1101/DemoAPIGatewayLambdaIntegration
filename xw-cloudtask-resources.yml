@@ -1,0 +1,168 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: AWS API Gateway with a Lambda Integration - xw-cloud task
+Resources:
+  S3BucketDemo:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    Properties:
+      BucketName: xw-cloudtask-ali-kazim
+  ApiGatewayIamRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: API_GATEWAY_TEST_ROLE
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: ''
+            Effect: 'Allow'
+            Principal:
+              Service:
+                - 'apigateway.amazonaws.com'
+            Action:
+              - 'sts:AssumeRole'
+      Policies:
+        - PolicyName: LambdaAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: 'Allow'
+                Action: 'lambda:*'
+                Resource: !Sub 'arn:aws:lambda:eu-west-1:${AWS::AccountId}:function:*'
+  LambdaIamRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: LAMBDA_TEST_ROLE
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: 'Allow'
+            Principal:
+              Service:
+                - 'lambda.amazonaws.com'
+            Action:
+              - 'sts:AssumeRole'
+      Policies:
+        - PolicyName: LAMBDA_TEST_POLICY
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: 'Allow'
+                Action: 's3:*'
+                Resource: '*'
+  ApiGatewayRestApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      ApiKeySourceType: HEADER
+      Description: An API Gateway with a Lambda Integration
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+      Name: test-lambda-api
+
+  ApiGatewayResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !GetAtt ApiGatewayRestApi.RootResourceId
+      PathPart: 'list'
+      RestApiId: !Ref ApiGatewayRestApi
+
+  ApiGatewayMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      ApiKeyRequired: false
+      AuthorizationType: NONE
+      HttpMethod: GET
+      Integration:
+        ConnectionType: INTERNET
+        Credentials: !GetAtt ApiGatewayIamRole.Arn
+        IntegrationResponses:
+        - StatusCode: 200
+        IntegrationHttpMethod: POST
+        TimeoutInMillis: 29000
+        Type: AWS_PROXY
+        Uri: !Sub 'arn:aws:apigateway:eu-west-1:lambda:path/2015-03-31/functions/${LambdaFunction.Arn}/invocations'
+      ResourceId: !Ref ApiGatewayResource
+      RestApiId: !Ref ApiGatewayRestApi
+
+  ApiGatewayModel:
+    Type: AWS::ApiGateway::Model
+    Properties:
+      ContentType: 'application/json'
+      RestApiId: !Ref ApiGatewayRestApi
+      Schema: {}
+
+  ApiGatewayStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      DeploymentId: !Ref ApiGatewayDeployment
+      Description: Lambda API Stage test
+      RestApiId: !Ref ApiGatewayRestApi
+      StageName: 'ali-kazim'
+
+  ApiGatewayDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn: ApiGatewayMethod
+    Properties:
+      Description: Lambda API Deployment
+      RestApiId: !Ref ApiGatewayRestApi
+  
+  LambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import logging
+          import uuid
+
+          log = logging.getLogger('__lambda_handler__')
+          def lambda_handler(event, context):
+              log.setLevel(level=logging.INFO)
+              
+              log.info('lambda_handler triggered')
+              
+              s3_client = boto3.client('s3')
+              bucket_name = 'xw-cloudtask-ali-kazim'
+              
+
+              try:
+                  bucket_response = get_bucket_content(s3_client, bucket_name)
+                  response_object = prepare_response(bucket_response)
+              except Exception as e:
+                  log.error('Execpution while preparing the GET response : ' + str(e))
+
+              return response_object          
+
+          def get_bucket_content(s3_client, bucket_name):
+              response = s3_client.list_objects_v2(Bucket=bucket_name)
+              s3_files = response["Contents"]
+              file_content =''
+              bucket_response = []
+              
+              for s3_file in s3_files:
+                  bucket_content = {}
+                  file_content = s3_client.get_object(Bucket=bucket_name,Key=s3_file["Key"])["Body"].read()
+                  bucket_content.update({'object-name' : s3_file["Key"] , 'content' : str(file_content)})
+                  bucket_response.append(bucket_content)
+                  
+              bucket_api_response = {}
+              bucket_api_response['response_id'] = str(uuid.uuid4())
+              bucket_api_response['bucket_response'] = bucket_response
+              
+              return bucket_api_response
+              
+          def prepare_response(bucket_response):
+              response_object = {}
+              response_object['statusCode'] = 200
+              response_object['headers'] = {}
+              response_object['headers']['Content-Type'] = 'application/json'
+              response_object['body'] = json.dumps(bucket_response)
+              return response_object        
+      Description: AWS Lambda function
+      FunctionName: 'test-gateway-action'
+      Handler: lambda_function.lambda_handler
+      MemorySize: 256
+      Role: !GetAtt LambdaIamRole.Arn
+      Runtime: python3.9
+      Timeout: 60
